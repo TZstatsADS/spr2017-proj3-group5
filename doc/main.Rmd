@@ -1,7 +1,7 @@
 ---
 title: "ads_prj_3"
 author: "Song WANG"
-date: "2017Äê3ÔÂ14ÈÕ"
+date: "2017??3??14??"
 output: html_document
 ---
 
@@ -21,34 +21,58 @@ library(plyr)
 
 ```{r}
 img_label <- read.csv("labels.csv")
-img_sift_feature_raw <- read.csv("sift_features.csv")
-img_sift_feature <- data.frame(t(img_sift_feature_raw))
-img_sift_feature <- cbind(img_sift_feature,img_label)
+img_hog_feature_raw <- read.csv("hog_features.csv", header = F)
+img_hog_feature <- data.frame((img_hog_feature_raw))
+img_hog_feature <- cbind(img_hog_feature,img_label)
 
 ```
 create training and test sets
 ```{r}
 set.seed(1)
 test_ind <- sample(1:5,2000,replace = T)
-img_test <- img_sift_feature[which(test_ind==5),]
-img_train <-img_sift_feature[which(test_ind!=5),]
-fit_gbm<-gbm.fit(x=img_train[,1:5000],y=img_train[,5001],n.trees = 1200,distribution = "bernoulli",interaction.depth = 3,bag.fraction = 0.5,verbose = FALSE)
+img_test <- img_hog_feature[which(test_ind==5),]
+img_train <-img_hog_feature[which(test_ind!=5),]
+fit_gbm<-gbm.fit(x=img_train[,1:1999],y=img_train[,2000],n.trees = 1200,distribution = "bernoulli",interaction.depth = 3,bag.fraction = 0.5,verbose = FALSE)
 #img_train$V1 <- factor(img_train$V1)
 #gbm1 <- gbm(formula = V1~., data = img_train, n.trees = 500)
-#exp(predict(fit_gbm, img_train[,-5001], n.tree = 1000))
+#exp(predict(fit_gbm, img_train[,-2000], n.tree = 1000))
 
 best_iter<-gbm.perf(fit_gbm,method = "OOB",plot.it = FALSE)
 best_iter
 
 
 #predict
-gbm_predict<-predict(fit_gbm,newdata=img_test[,-5001],n.tree=fit_gbm$n.tree,type="response")
+gbm_predict<-predict(fit_gbm,newdata=img_test[,-2000],n.tree=fit_gbm$n.tree,type="response")
 pre<-ifelse(gbm_predict>=0.5,1,0)
 hist(pre)
-mean(pre!=img_test[,5001])
+mean(pre!=img_test[,2000])
 
 
-#tune
+### new trained model~1
+      
+fit_gbm233<-gbm.fit(x=img_train[,1:1999],y=img_train[,2000],n.trees = 1999,distribution = "bernoulli",interaction.depth = 10,bag.fraction = 0.5,verbose = FALSE)
+#img_train$V1 <- factor(img_train$V1)
+#gbm1 <- gbm(formula = V1~., data = img_train, n.trees = 500)
+#exp(predict(fit_gbm, img_train[,-2000], n.tree = 1000))
+
+best_iter233<-gbm.perf(fit_gbm233,method = "OOB",plot.it = FALSE)
+best_iter233
+
+
+
+
+
+#predict
+gbm_predict233<-predict(fit_gbm233,newdata=img_test[,-2000],n.tree=fit_gbm233$n.tree,type="response")
+pre233<-ifelse(gbm_predict233>=0.5,1,0)
+hist(pre233)
+mean(pre233!=img_test[,2000])
+
+
+
+
+###1
+#tune 
 
 #tc<-tune.control(cross = 5)
 
@@ -59,43 +83,43 @@ mean(pre!=img_test[,5001])
 ```{r}
 set.seed(2)
 bootcontrol<-trainControl(number = 1)
-gbm_grid<-expand.grid(.n.trees=(1:2)*500,.interaction.depth=3,.shrinkage=.1,.n.minobsinnode=10)
-gbm_fit2<-train(img_train[,1:5000],factor(img_train[,5001]),method = "gbm",trControl = bootcontrol,verbose=FALSE,bag.fraction=0.5,tuneGrid = gbm_grid)
+gbm_grid<-expand.grid(.n.trees=1999,.interaction.depth=seq(2,30,4),.shrinkage=.1,.n.minobsinnode=10)
+gbm_fit2<-train(img_train[,1:1999],factor(img_train[,2000]),method = "gbm",trControl = bootcontrol,verbose=FALSE,bag.fraction=0.5,tuneGrid = gbm_grid)
 ```
 
-#sift_5000+svm
+#hog_1999+svm
 ```{r}
 
 tc<-tune.control(cross=5)
 tuneSVM<-tune(svm,V1~.,data = img_train,kernel="linear",ranges = list(cost=c(5,10)),tunecontrol = tc,scale=FALSE)
 best_svm<-tuneSVM$best.model
-svm_predict<-ifelse(predict(best_svm,img_test[,-5001])>0.5,1,0)
-error_svm<-mean(svm_predict!=img_test[,5001])
+svm_predict<-ifelse(predict(best_svm,img_test[,-2000])>0.5,1,0)
+error_svm<-mean(svm_predict!=img_test[,2000])
 
 
 
 
 ```
 
-#sift_5000+logistic
+#hog_1999+logistic
 ```{r}
 best_logistic<-glm(V1~.,family = binomial(link = "logit"),data = img_train)
-log_predict<-ifelse(predict(best_logistic,img_test[,-5001])>0.5,1,0)
-error_log<-mean(log_predict!=img_test[,5001])
+log_predict<-ifelse(predict(best_logistic,img_test[,-2000])>0.5,1,0)
+error_log<-mean(log_predict!=img_test[,2000])
 ```
 
-#sift_5000+svm_kernel
+#hog_1999+svm_kernel
 ```{r}
-tuneSVMkernel<-tune(svm,V1~.,data = img_train,kernel="radial",ranges = list(cost=10,gamma=5),tunecontrol = tc,scale=FALSE)
+tuneSVMkernel<-tune(svm,V1~.,data = img_train,kernel="radial",ranges = list(cost=c(0.5,1,2,5,10,20),gamma=c(1,5,10,20),tunecontrol = tc,scale=FALSE))
 best_kernel<-tuneSVMkernel$best.model
-kernel_predict<-ifelse(predict(best_kernel,img_test[,-5001])>0.5,1,0)
-error_kernel<-mean(kernel_predict!=img_test[,5001])
+kernel_predict<-ifelse(predict(best_kernel,img_test[,-2000])>0.5,1,0)
+error_kernel<-mean(kernel_predict!=img_test[,2000])
 ```
 
-#sift_5000+knn
+#hog_1999+knn
 ```{r}
-full.data<-img_train[,-5001]
-full.dir<-img_train[,5001]
+full.data<-img_train[,-2000]
+full.dir<-img_train[,2000]
 tuneKNN<-tune.knn(x=full.data,y=factor(full.dir),k=c(1,10,20),tunecontrol=tune.control(sampling = "cross"),cross=5)
 tuneKNN2<-tune.knn(x=full.data,y=factor(full.dir),k=c(3,5),tunecontrol=tune.control(sampling = "cross"),cross=5)
 tuneKNN3<-tune.knn(x=full.data,y=factor(full.dir),k=2,tunecontrol=tune.control(sampling = "cross"),cross=5)
@@ -103,6 +127,7 @@ summary(tuneKNN3)
 summary(tuneKNN2)
 summary(tuneKNN)
 ```
+
 
 ```{r}
 
