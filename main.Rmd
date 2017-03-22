@@ -32,7 +32,10 @@ set.seed(1)
 test_ind <- sample(1:5,2000,replace = T)
 img_test <- img_hog_feature[which(test_ind==5),]
 img_train <-img_hog_feature[which(test_ind!=5),]
+
+
 fit_gbm<-gbm.fit(x=img_train[,1:1999],y=img_train[,2000],n.trees = 1200,distribution = "bernoulli",interaction.depth = 3,bag.fraction = 0.5,verbose = FALSE)
+
 #img_train$V1 <- factor(img_train$V1)
 #gbm1 <- gbm(formula = V1~., data = img_train, n.trees = 500)
 #exp(predict(fit_gbm, img_train[,-2000], n.tree = 1000))
@@ -50,7 +53,7 @@ mean(pre!=img_test[,2000])
 
 ### new trained model~1
       
-fit_gbm233<-gbm.fit(x=img_train[,1:1999],y=img_train[,2000],n.trees = 1999,distribution = "bernoulli",interaction.depth = 10,bag.fraction = 0.5,verbose = FALSE)
+fit_gbm233<-gbm.fit(x=img_train[,1:1999],y=img_train[,2000],n.trees = 2500,distribution = "bernoulli",interaction.depth = 10,bag.fraction = 0.5,verbose = FALSE)
 #img_train$V1 <- factor(img_train$V1)
 #gbm1 <- gbm(formula = V1~., data = img_train, n.trees = 500)
 #exp(predict(fit_gbm, img_train[,-2000], n.tree = 1000))
@@ -66,7 +69,7 @@ best_iter233
 gbm_predict233<-predict(fit_gbm233,newdata=img_test[,-2000],n.tree=fit_gbm233$n.tree,type="response")
 pre233<-ifelse(gbm_predict233>=0.5,1,0)
 hist(pre233)
-mean(pre233!=img_test[,2000])
+1-mean(pre233!=img_test[,2000])
 
 
 
@@ -89,9 +92,9 @@ gbm_fit2<-train(img_train[,1:1999],factor(img_train[,2000]),method = "gbm",trCon
 
 #hog_1999+svm
 ```{r}
-
+names(img_train)[2000] <- "V2000"
 tc<-tune.control(cross=5)
-tuneSVM<-tune(svm,V1~.,data = img_train,kernel="linear",ranges = list(cost=c(5,10)),tunecontrol = tc,scale=FALSE)
+tuneSVM<-tune(svm,V2000~.,data = img_train,kernel="linear",ranges = list(cost=c(5,10)),tunecontrol = tc,scale=FALSE)
 best_svm<-tuneSVM$best.model
 svm_predict<-ifelse(predict(best_svm,img_test[,-2000])>0.5,1,0)
 error_svm<-mean(svm_predict!=img_test[,2000])
@@ -110,17 +113,20 @@ error_log<-mean(log_predict!=img_test[,2000])
 
 #hog_1999+svm_kernel
 ```{r}
-tuneSVMkernel<-tune(svm,V1~.,data = img_train,kernel="radial",ranges = list(cost=c(0.5,1,2,5,10,20),gamma=c(1,5,10,20),tunecontrol = tc,scale=FALSE))
+img_train$V2000 <- as.integer(img_train$V2000)
+tuneSVMkernel<-tune(svm,V2000~.,data = img_train,kernel="radial",ranges = list(cost=10^(-1:2),gamma=10^(-3:0)),tunecontrol = tc,scale=FALSE)
 best_kernel<-tuneSVMkernel$best.model
-kernel_predict<-ifelse(predict(best_kernel,img_test[,-2000])>0.5,1,0)
+kernel_predict<-ifelse(predict(best_kernel,img_test[,-2000],type="response")>0.5,1,0)
 error_kernel<-mean(kernel_predict!=img_test[,2000])
+
+svm_kernel_ceshi <- svm(x=as.matrix(img_train[,-2000]),y=img_train[,2000],type = "C",kernel = "radial", cost = 5, gamma = 10)
 ```
 
 #hog_1999+knn
 ```{r}
 full.data<-img_train[,-2000]
 full.dir<-img_train[,2000]
-tuneKNN<-tune.knn(x=full.data,y=factor(full.dir),k=c(1,10,20),tunecontrol=tune.control(sampling = "cross"),cross=5)
+tuneKNN<-tune.knn(x=full.data,y=factor(full.dir),k=c(1),tunecontrol=tune.control(sampling = "cross"),cross=5)
 tuneKNN2<-tune.knn(x=full.data,y=factor(full.dir),k=c(3,5),tunecontrol=tune.control(sampling = "cross"),cross=5)
 tuneKNN3<-tune.knn(x=full.data,y=factor(full.dir),k=2,tunecontrol=tune.control(sampling = "cross"),cross=5)
 summary(tuneKNN3)
