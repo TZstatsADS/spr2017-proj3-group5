@@ -7,7 +7,11 @@ The data directory contains data used in the analysis. This is treated as read o
 
 
 These files are raw training images and data generate from them.
+
+
 --raw images
+
 --hog_features
+
 --sift_features
 
