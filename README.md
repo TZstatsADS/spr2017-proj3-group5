@@ -5,7 +5,7 @@
 
 Term: Spring 2017
 
-+ Team #
++ Team 5
 + Team members
 	+ Chen, Kai
 	+ Guo, Zhengyuan 
