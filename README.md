@@ -17,10 +17,13 @@ Term: Spring 2017
 	
 **Contribution statement**: ([default](doc/a_note_on_contributions.md)) 
 The majority of the project are completed by 
-  Wang, Song 
-  Zhang, Jiaohao
-  Chen, Kai
-  Guo Zhengyuan
+  + Wang, Song 
+  
+  + Zhang, Jiaohao
+  
+  + Chen, Kai
+  
+  + Guo Zhengyuan
 Four team members mentioned above contributed equally in all stages of this project. 
 Jiang, Yi helped with model tuning by the end of the project.
 
