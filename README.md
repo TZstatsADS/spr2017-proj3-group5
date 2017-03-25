@@ -24,6 +24,8 @@ The majority of the project are completed by
   + Chen, Kai
   
   + Guo Zhengyuan
+  
+  
 Four team members mentioned above contributed equally in all stages of this project. 
 Jiang, Yi helped with model tuning by the end of the project.
 
