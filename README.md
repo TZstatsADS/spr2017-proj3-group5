@@ -27,7 +27,8 @@ The majority of the project are completed by
   
   
 Four team members mentioned above contributed equally in all stages of this project. 
-Jiang, Yi helped with model tuning by the end of the project.
+
+Jiang, Vic helped with model tuning by the end of the project.
 
 Following [suggestions](http://nicercode.github.io/blog/2013-04-05-projects/) by [RICH FITZJOHN](http://nicercode.github.io/about/#Team) (@richfitz). This folder is orgarnized as follows.
 
