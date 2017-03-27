@@ -6,54 +6,37 @@
 ### Project 3
 ### ADS Spring 2016
 
-img_label <- read.csv("labels.csv")
-img_hog_feature_raw <- read.csv("HOG8_8.csv",header = FALSE)
-img_hog_feature_raw <- img_hog_feature_raw[,1:200]
-img_hog_feature <- data.frame(img_hog_feature_raw)
-img_hog_feature <- cbind(img_hog_feature,img_label)
-names(img_hog_feature)[201]<-"label"
-set.seed(1)
-test_ind <- sample(1:5,2000,replace = T)
-img_test <- img_hog_feature[which(test_ind==5),]
-img_train <-img_hog_feature[which(test_ind!=5),]
-img_train$label<-factor(img_train$label)
-img_test$label<-factor(img_test$label)
+#for baseline gbm
+# depth <- 1   #set interaction.depth
+# n_trees <- seq(1000, 2000, 100)
+# shrinkage <- 0.001
+# model_label_gbm = paste("GBM with n_trees =", n_trees)
 
-cv.function <- function(modelname, data.train,k){
-  if(modelname==gbm){
-       library(gbm)
-       tuneSVMkernel<-tune(modelname,label~.,data = img_train,kernel="radial",ranges = list(cost=c(1),gamma=c(0.0015,0.002,0.0025)),tunecontrol = tc,scale=T)
-       best_kernel<-tuneSVMkernel$best.model
-       kernel_predict<-predict(best_kernel,img_test[,-201])
-       error_kernel<-mean(kernel_predict!=img_test[,201])
+#for advanced svm_radial
+# cost <- seq(5,20,5)
+# gamma <- seq(0.001,0.009,0.002)
+# model_labels_svm = paste("svm with cost=",cost," gamma=",gamma)
+
+cv.function <- function(K,n_trees, cost, gamma){
+  ##gbm cv  
+    gbm_grid<-expand.grid(.n.trees=n_trees,.interaction.depth=1,.shrinkage=.001,.n.minobsinnode=20)
+    bootcontrol<-trainControl(number = K)
+    gbm_fit2<-train(sift_train[,1:5000],label_train,method = "gbm",trControl = bootcontrol,verbose=FALSE,bag.fraction=0.5,tuneGrid = gbm_grid)
+    best_ntree <- unlist(unname(gbm_fit2$bestTune))[1]
+  ##svm cv
+    tc<-tune.control(cross=K)
+    tuneSVMkernel<-tune(svm,label_train~.,data=hog_train_new,kernel="radial",ranges = list(cost=cost,gamma=gamma),tunecontrol = tc,scale=T)
+    best_cost <- unlist(unname(tuneSVMkernel$best.parameters)[1])
+    best_gamma<- unlist(unname(tuneSVMkernel$best.parameters)[2])
+    
+  ##print results  
+    print("Baseline model cv results:")
+    print(gbm_fit2$results)
+    print("Advanced model cv results:")
+    print(tuneSVMkernel$performances)
+    
+  ##return the best models
+    return(c(best_ntree, best_gamma, best_cost))
     }
-  else if(modelname=svm){
-    tc<-tune.control(cross=k)
-    tuneSVMkernel<-tune(modelname,label~.,data = img_train,kernel="radial",ranges = list(cost=c(5,10,15,20),gamma=c(0.001,0.002,0.005)),tunecontrol = tc,scale=T)
-    best_kernel<-tuneSVMkernel$best.model
-    return(best_kernel)
-     }
-       
-   }
-cv.function <- function(X.train, y.train, d, K){
-  
-  n <- length(y.train)
-  n.fold <- floor(n/K)
-  s <- sample(rep(1:K, c(rep(n.fold, K-1), n-(K-1)*n.fold)))  
-  cv.error <- rep(NA, K)
-  
-  for (i in 1:K){
-    train.data <- X.train[s != i,]
-    train.label <- y.train[s != i]
-    test.data <- X.train[s == i,]
-    test.label <- y.train[s == i]
-    
-    par <- list(depth=d)
-    fit <- train(train.data, train.label, par)
-    pred <- test(fit, test.data)  
-    cv.error[i] <- mean(pred != test.label)  
-    
-  }			
-  return(c(mean(cv.error),sd(cv.error)))
-  
-}
+
+
