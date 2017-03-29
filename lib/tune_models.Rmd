@@ -1,0 +1,215 @@
+---
+title: "Model Selection(Parameter-Tuning Part)"
+author: 'Kai Chen(UNI: kc3041)'
+date: "3/23/2017"
+output: html_document
+---
+
+## This report provides details about model selections. 
+
+# 1. Preparation
+```{r}
+# Load library
+library(gbm)
+library(xgboost)  
+library(caret)
+library(e1071)
+library(plyr)
+library(parallel)
+library(class)
+
+# Load Data(SIFT): We get 2000 samples with 5000 features and 1 response 
+img_label <- read.csv("labels.csv")
+img_sift_feature_raw <- read.csv("sift_features.csv")
+img_sift_feature <- data.frame(t(img_sift_feature_raw))
+img_sift_feature <- cbind(img_sift_feature,img_label)
+
+
+# Train/Test Division
+set.seed(1)
+division = 5
+test_ind <- sample(rep(1:division,2000/division))
+img_test <- img_sift_feature[which(test_ind == division),]
+img_train <-img_sift_feature[which(test_ind != division),]
+
+# Train/Validation Division
+set.seed(3041)
+folds <- 5
+cv_ind <- sample(rep(1:folds,1600/folds))
+
+```
+
+
+# 2. Parameters selections(SIFT)
+### 1) Sift + Liear SVM: parameters: 'cost'
+```{r}
+
+#cost_range1 <- 10^c(-2:2)
+cost_range1 <- c(1,10,50,100,200,450,1000)
+length1 <- length(cost_range1)
+
+
+# a single SVM
+svm_linear <- function(cost, train, test){
+  svm1 <- svm(V1 ~., data = train, cost = cost, 
+              scale = F, kernel = "linear") 
+  pred_svm1 <- ifelse(predict(svm1, test[,-5001]) > 0.5, 1, 0)
+  error1 <- mean(pred_svm1 != test[, 5001])
+  return(error1)
+}
+
+## Do parallel computing, and it will only take around 1/7 time to tune!
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+error <- matrix(NA, nrow = folds, ncol = length1)
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error[j,] <- parSapply(cl1, cost_range1, svm_linear, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+colnames(error) <- cost_range1
+error_svm_tune <- colMeans(error)
+
+# Test Error
+best_para_svm <- as.numeric(names(error_svm_tune)[which.min(error_svm_tune)])
+error_test_svm <- svm_linear(best_para_svm, img_train, img_test)
+
+# Plot validation error
+plot(names(error_svm_tune), error_svm_tune, 
+     main = "Validation Error: SVM Linear", xlab = "cost", 
+     ylab = "error rate", type = "o")
+1 - error_test_svm
+```
+
+## 2) Sift + KNN: parameters: 'k'
+```{r}
+
+# knn
+knn_ <- function(k, train, test){
+  knn1 <- knn(train = train[, 1:5000], test = test[, 1:5000], cl = train[,5001],k = k, prob = T)
+  error1 <- mean(knn1 != test[, 5001])
+  return(error1)
+}
+
+k_range1 <- c(1,2,3,5,10,20,30)
+length2 <- length(k_range1)
+error2 <- matrix(NA, nrow = folds, ncol = length2)
+
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error2[j,] <- parSapply(cl1, k_range1, knn_, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+
+colnames(error2) <- cost_range1
+error_knn <- colMeans(error2)
+
+plot(names(error_knn), error_knn, 
+     main = "Validation Error: SIFT + KNN ", xlab = "cost", 
+     ylab = "error rate", type = "o", log = "x")
+
+best_para_knn <- as.numeric(names(error_knn)[which.min(error_knn)])
+error_test_knn <- knn_(best_para_knn, img_train, img_test)
+1 - error_test_knn
+```
+
+## 3. Sift + GBM(Baseline): parameteres: 'n.tree'
+```{r}
+gbm_ <- function(ntree, train, test){
+  gbm1 <- gbm.fit(x = train[,-5001], 
+                  y = train[,5001],
+                  distribution = "bernoulli", 
+                  n.trees = ntree,
+                  interaction.depth = 1,
+                  verbose = F)
+  pred_gbm1 <- predict.gbm(gbm1, 
+                           newdata = test[,-5001],
+                           n.trees = gbm1$n.trees, 
+                           type = "response")
+  pred_gbm1 <- ifelse(pred_gbm1 > 0.5, 1, 0)
+  error3 <- mean(pred_gbm1 != test[, 5001])
+  return(error3)
+}
+
+ntree_range <- c(100,250,500,1000,2500,5000)
+length3 <- length(ntree_range)
+error3 <- matrix(NA, nrow = folds, ncol = length3)
+
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error3[j,] <- parSapply(cl1, ntree_range, gbm_, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+
+colnames(error3) <- ntree_range
+error_gbm <- colMeans(error3)
+
+plot(names(error_gbm), error_gbm, 
+     main = "Validation Error: SIFT + GBM ", xlab = "cost", 
+     ylab = "error rate", type = "o", log = "x")
+
+best_para_gbm <- as.numeric(names(error_gbm)[which.min(error_gbm)])
+error_test_gbm <- gbm_(8000, img_train, img_test)
+1 - error_test_gbm
+
+```
+
+
+## 4. Sift + SVM Kernel: 'cost' & 'gamma'
+```{r}
+
+# You can edit the values here
+# To have an easy observation, we only run 7 pairs of data per time.
+gamma_cost_range <- list(A1 = c(5,100), 
+                         A2 = c(5,10),
+                         A3 = c(5,1),
+                         A4 = c(5,0.1),
+                         A5 = c(5,0.01),
+                         A6 = c(5,0.001),
+                         A7 = c(5,0.0001)
+                         )
+length4 <- length(gamma_cost_range)
+error4 <- matrix(NA, nrow = folds, ncol = length4)
+
+# a kernel SVM
+svm_kernel <- function(paras, train, test){
+  svm4 <- svm(V1 ~., data = train, 
+              scale = F, kernel = "radial",
+              gamma = paras[1], cost = paras[2]) 
+  pred_svm4 <- ifelse(predict(svm4, test[,-5001]) > 0.5, 1, 0)
+  error4 <- mean(pred_svm4 != test[, 5001])
+  return(error4)
+}
+
+
+## Do parallel computing, and it will only take around 1/7 time to tune!
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+error <- matrix(NA, nrow = folds, ncol = length1)
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error4[j,] <- parSapply(cl1, gamma_cost_range, svm_kernel, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+colnames(error4) <- sapply(gamma_cost_range, paste, collapse = "|")
+error_svm_kernel_tune <- colMeans(error4)
+
+# Test Error
+error_test_svm_kernel <- svm_kernel(c(5,10), img_train, img_test)
+1 - error_test_svm_kernel
+
+```
+
+
