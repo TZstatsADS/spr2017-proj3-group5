@@ -2,14 +2,17 @@
 title: "Model Selection"
 author: 'Kai Chen(Contact: kc3041@columbia.edu)'
 date: "3/23/2017"
-output:
-  pdf_document: default
-  html_document: default
+output: 
+   html_document: default
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
 
 # Introduction
 
-This report gives details about how we choose models. 
+This report provides details about our model selections. Our rule is mainly choosing the minimal test error algorithm through cross validation. The 'training time' for each model is also provided for users who care about the time. The data are the SIFT-features extracted from 2000 pictures through MATLAB, which can be downloaded from our GITHUB: https://github.com/TZstatsADS/spr2017-proj3-group5/tree/master/lib. 
 
 # 1. Preparation
 ```{r, eval=FALSE}
@@ -28,7 +31,39 @@ img_label <- read.csv("labels.csv")
 img_sift_feature_raw <- read.csv("sift_features.csv")
 img_sift_feature <- data.frame(t(img_sift_feature_raw))
 img_sift_feature <- cbind(img_sift_feature,img_label)
+n_response = ncol(img_sift_feature)
 
+# Train/Test Division
+set.seed(1)
+division = 5
+test_ind <- sample(rep(1:division,2000/division))
+img_test <- img_sift_feature[which(test_ind == division),]
+img_train <-img_sift_feature[which(test_ind != division),]
+
+# Train/Validation Division
+set.seed(3041)
+folds <- 5
+cv_ind <- sample(rep(1:folds,1600/folds))
+
+```
+
+```{r preparation, include=FALSE}
+# Load library
+library(gbm)
+library(xgboost)  
+library(caret)
+library(e1071)
+library(plyr)
+library(parallel)
+library(class)
+library(plotly)
+
+# Load Data(SIFT): We get 2000 samples with 5000 features and 1 response 
+img_label <- read.csv("labels.csv")
+img_sift_feature_raw <- read.csv("sift_features.csv")
+img_sift_feature <- data.frame(t(img_sift_feature_raw))
+img_sift_feature <- cbind(img_sift_feature,img_label)
+n_response = ncol(img_sift_feature)
 
 # Train/Test Division
 set.seed(1)
@@ -47,7 +82,7 @@ cv_ind <- sample(rep(1:folds,1600/folds))
 
 # 2. Parameter Selections(SIFT)
 ### 1) Sift + Liear SVM: parameter: 'cost'
-```{r}
+```{r sift_SVM}
 
 #cost_range1 <- 10^c(-2:2)
 cost_range1 <- c(1,10,50,100,200,450,1000)
@@ -58,8 +93,8 @@ length1 <- length(cost_range1)
 svm_linear <- function(cost, train, test){
   svm1 <- svm(V1 ~., data = train, cost = cost, 
               scale = F, kernel = "linear") 
-  pred_svm1 <- ifelse(predict(svm1, test[,-5001]) > 0.5, 1, 0)
-  error1 <- mean(pred_svm1 != test[, 5001])
+  pred_svm1 <- ifelse(predict(svm1, test[,-n_response]) > 0.5, 1, 0)
+  error1 <- mean(pred_svm1 != test[, n_response])
   return(error1)
 }
 
@@ -79,7 +114,7 @@ error_svm_tune <- colMeans(error)
 
 # Test Error
 best_para_svm <- as.numeric(names(error_svm_tune)[which.min(error_svm_tune)])
-error_test_svm <- svm_linear(best_para_svm, img_train, img_test)
+time_1 <- system.time(error_test_svm <- svm_linear(best_para_svm, img_train, img_test))
 
 # Prepare for plotting
 colors1 <- rep('rgba(103,204,204,1)', length1)
@@ -88,7 +123,7 @@ plot1_data <- data.frame(cost = cost_range1, accuracy = 1-error_svm_tune, COLOR 
 
 ```
 ##### Result:
-```{r, echo = T}
+```{r sift_SVM_result, echo=FALSE}
 
 p1 <- plot_ly(plot1_data, x = ~cost, y = ~accuracy, type = 'scatter', 
               mode = 'markers+lines', marker = list(size = 15),
@@ -109,12 +144,12 @@ cat(result_svm)
 
 
 ## 2) Sift + KNN: parameter: 'k'
-```{r}
+```{r sift_KNN}
 
 # knn
 knn_ <- function(k, train, test){
-  knn1 <- knn(train = train[, 1:5000], test = test[, 1:5000], cl = train[,5001],k = k, prob = T)
-  error1 <- mean(knn1 != test[, 5001])
+  knn1 <- knn(train = train[, -n_response], test = test[, -n_response], cl = train[,n_response],k = k, prob = T)
+  error1 <- mean(knn1 != test[, n_response])
   return(error1)
 }
 
@@ -136,7 +171,7 @@ colnames(error2) <- cost_range1
 error_knn <- colMeans(error2)
 
 best_para_knn <- as.numeric(names(error_knn)[which.min(error_knn)])
-error_test_knn <- knn_(best_para_knn, img_train, img_test)
+time_2 <- system.time(error_test_knn <- knn_(best_para_knn, img_train, img_test))
 
 # Prepare for plotting
 colors2 <- rep('rgba(103,204,204,1)', length2)
@@ -147,7 +182,7 @@ plot2_data <- data.frame(k = k_range1, accuracy = 1-error_knn, COLOR = colors2)
 ```
 
 ##### Result:
-```{r, echo = F}
+```{r sift_KNN_result, echo=FALSE}
 # Plot validation error
 p2 <- plot_ly(plot2_data, x = ~k, y = ~accuracy, type = 'scatter', 
               mode = 'markers+lines', marker = list(size = 15),
@@ -170,20 +205,20 @@ cat(result_knn)
 
 
 ## 3. Sift + GBM(Baseline): parameteres: 'n.tree'
-```{r}
+```{r sift_GBM}
 gbm_ <- function(ntree, train, test){
-  gbm1 <- gbm.fit(x = train[,-5001], 
-                  y = train[,5001],
+  gbm1 <- gbm.fit(x = train[,-n_response], 
+                  y = train[,n_response],
                   distribution = "bernoulli", 
                   n.trees = ntree,
                   interaction.depth = 1,
                   verbose = F)
   pred_gbm1 <- predict.gbm(gbm1, 
-                           newdata = test[,-5001],
+                           newdata = test[,-n_response],
                            n.trees = gbm1$n.trees, 
                            type = "response")
   pred_gbm1 <- ifelse(pred_gbm1 > 0.5, 1, 0)
-  error3 <- mean(pred_gbm1 != test[, 5001])
+  error3 <- mean(pred_gbm1 != test[, n_response])
   return(error3)
 }
 
@@ -206,7 +241,7 @@ error_gbm <- colMeans(error3)
 
  
 best_para_gbm <- as.numeric(names(error_gbm)[which.min(error_gbm)])
-error_test_gbm <- gbm_(best_para_gbm, img_train, img_test)
+time_3 <- system.time(error_test_gbm <- gbm_(best_para_gbm, img_train, img_test))
 
 # Prepare for plotting
 colors3 <- rep('rgba(103,204,204,1)', length3)
@@ -216,7 +251,7 @@ plot3_data <- data.frame(n.tree = ntree_range, accuracy = 1-error_gbm, COLOR = c
 ```
 
 ##### Result:
-```{r, echo = T}
+```{r sift_GBM_result, echo=FALSE}
 1 - error_gbm
 # Plot validation error
 p3 <- plot_ly(plot3_data, x = ~n.tree, y = ~accuracy, type = 'scatter', 
@@ -230,7 +265,7 @@ p3 <- plot_ly(plot3_data, x = ~n.tree, y = ~accuracy, type = 'scatter',
          showlegend = T)
 p3
 
-
+ 
 plot(names(error_gbm), error_gbm, 
      main = "Validation Error: SIFT + GBM ", xlab = "cost", 
      ylab = "error rate", type = "o", log = "x")
@@ -242,8 +277,8 @@ cat(result_gbm)
 ```
 
 
-## 4. Sift + SVM Kernel: 'cost' & 'gamma'
-```{r}
+## 4. Sift + SVM Kernel: 'cost' and 'gamma'
+```{r sift_SVM_K}
 
 # You can edit the values here
 gamma_cost_range <- list(A1 = c(1,1),
@@ -291,17 +326,17 @@ svm_kernel <- function(paras, train, test){
   svm4 <- svm(V1 ~., data = train, 
               scale = F, kernel = "radial",
               gamma = paras[1], cost = paras[2]) 
-  pred_svm4 <- ifelse(predict(svm4, test[,-5001]) > 0.5, 1, 0)
-  error4 <- mean(pred_svm4 != test[, 5001])
+  pred_svm4 <- ifelse(predict(svm4, test[,-n_response]) > 0.5, 1, 0)
+  error4 <- mean(pred_svm4 != test[, n_response])
   return(error4)
 }
 
 
-## Do parallel computing, and it will only take around 1/7 time to tune!
+## Do parallel computing!
 no_cores <- detectCores() - 1
 cl1 <- makeCluster(no_cores, type="FORK")
 
-error <- matrix(NA, nrow = folds, ncol = length1)
+error <- matrix(NA, nrow = folds, ncol = length4)
 for (j in 1:folds){ 
   cv_train <- img_train[j != cv_ind,]
   cv_test <- img_train[j == cv_ind,]
@@ -318,7 +353,7 @@ para1 <- as.numeric(substr(best_name, 1, reg-1))
 para2 <- as.numeric(substr(best_name, reg+1, nchar(best_name)))
 
 # Test Error
-error_test_svm_kernel <- svm_kernel(c(para1,para2), img_train, img_test)
+time_4 <- system.time(error_test_svm_kernel <- svm_kernel(c(para1,para2), img_train, img_test))
 
 # Prepare for the plot
 x1 <- sapply(gamma_cost_range, function(l){return(l[1])})
@@ -328,7 +363,7 @@ plot4_data <- data.frame(X1 = x1, Y1 = y1, COLOR = z1)
 ```
 
 ##### Result:
-```{r, echo = F}
+```{r sift_SVM_K_result, echo=FALSE}
 
 colors4 <- rep('rgba(103,204,204,1)', length4)
 colors4[which.min(error_svm_kernel_tune)] <- 'rgba(222,45,38,0.8)'
@@ -339,7 +374,6 @@ p4 <- plot_ly(plot4_data, x = ~X1, y = ~Y1, text = ~COLOR, type = 'scatter', mod
   layout(title = 'CV accuracy of SVM_kernel model(gamma, cost)',
          xaxis = list(showgrid = T),
          yaxis = list(showgrid = T, type = "log"))
-
 p4
 
 
@@ -359,7 +393,7 @@ cat(result_svm_k)
 
 Here are the performance of each algorithm. 
 
-```{r}
+```{r conclusion, echo=FALSE}
 
 RESULT <- c(max(1- error_svm_tune), 1- error_test_svm, time_1[1])
 RESULT <- rbind(RESULT, c(max(1- error_knn), 1- error_test_knn, time_2[1]))
@@ -368,5 +402,5 @@ RESULT <- rbind(RESULT, c(max(1- error_svm_kernel_tune), 1- error_test_svm_kerne
 colnames(RESULT) <- c("CV Accuracy", "TEST Accuracy", "Training Time")
 rownames(RESULT) <- c("SVM(Linear)", "KNN", "GBM","SVM(Kernel)")
 RESULT
-cat("Hence we choose", rownames(RESULT)[which.max(RESULT[,2])], ".")
+cat("Hence, to get a higher accuracy, we could choose ", rownames(RESULT)[which.max(RESULT[,2])], "; However, if the time is really limited, we could consider ", rownames(RESULT)[which.min(RESULT[,3])])
 ```
