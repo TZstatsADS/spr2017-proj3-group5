@@ -1,0 +1,380 @@
+---
+title: "Model Selection"
+author: 'Kai Chen(Contact: kc3041@columbia.edu)'
+date: "3/23/2017"
+output: 
+   html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This report provides details about our model selections. Our rule is mainly choosing the minimal test error algorithm through cross validation. The 'training time' for each model is also provided for users who care about the time. The data are the SIFT-features extracted from 2000 pictures through MATLAB, which can be downloaded from our GITHUB: https://github.com/TZstatsADS/spr2017-proj3-group5/tree/master/lib. You can also find the code for visualization in the above folder. 
+
+# 1. Preparation
+```{r, eval=FALSE}
+# Load library
+library(gbm)
+library(xgboost)  
+library(caret)
+library(e1071)
+library(plyr)
+library(parallel)
+library(class)
+library(plotly)
+
+# Load Data(SIFT): We get 2000 samples with 5000 features and 1 response 
+img_label <- read.csv("labels.csv")
+img_sift_feature_raw <- read.csv("sift_features.csv")
+img_sift_feature <- data.frame(t(img_sift_feature_raw))
+img_sift_feature <- cbind(img_sift_feature,img_label)
+n_response = ncol(img_sift_feature)
+
+# Train/Test Division
+set.seed(1)
+division = 5
+test_ind <- sample(rep(1:division,2000/division))
+img_test <- img_sift_feature[which(test_ind == division),]
+img_train <-img_sift_feature[which(test_ind != division),]
+
+# Train/Validation Division
+set.seed(3041)
+folds <- 5
+cv_ind <- sample(rep(1:folds,1600/folds))
+
+```
+
+```{r preparation, include=FALSE}
+# Load library
+library(gbm)
+library(xgboost)  
+library(caret)
+library(e1071)
+library(plyr)
+library(parallel)
+library(class)
+library(plotly)
+
+# Load Data(SIFT): We get 2000 samples with 5000 features and 1 response 
+img_label <- read.csv("labels.csv")
+img_sift_feature_raw <- read.csv("sift_features.csv")
+img_sift_feature <- data.frame(t(img_sift_feature_raw))
+img_sift_feature <- cbind(img_sift_feature,img_label)
+n_response = ncol(img_sift_feature)
+
+# Train/Test Division
+set.seed(1)
+division = 5
+test_ind <- sample(rep(1:division,2000/division))
+img_test <- img_sift_feature[which(test_ind == division),]
+img_train <-img_sift_feature[which(test_ind != division),]
+
+# Train/Validation Division
+set.seed(3041)
+folds <- 5
+cv_ind <- sample(rep(1:folds,1600/folds))
+
+```
+
+
+# 2. Parameter Selections(SIFT)
+### 1) Sift + Liear SVM: parameter: 'cost'
+```{r sift_SVM}
+
+#cost_range1 <- 10^c(-2:2)
+cost_range1 <- c(1,10,50,100,200,450,1000)
+length1 <- length(cost_range1)
+
+
+# a single SVM
+svm_linear <- function(cost, train, test){
+  svm1 <- svm(V1 ~., data = train, cost = cost, 
+              scale = F, kernel = "linear") 
+  pred_svm1 <- ifelse(predict(svm1, test[,-n_response]) > 0.5, 1, 0)
+  error1 <- mean(pred_svm1 != test[, n_response])
+  return(error1)
+}
+
+## Do parallel computing, and it will only take around 1/7 time to tune!
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+error <- matrix(NA, nrow = folds, ncol = length1)
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error[j,] <- parSapply(cl1, cost_range1, svm_linear, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+colnames(error) <- cost_range1
+error_svm_tune <- colMeans(error)
+
+# Test Error
+best_para_svm <- as.numeric(names(error_svm_tune)[which.min(error_svm_tune)])
+time_1 <- system.time(error_test_svm <- svm_linear(best_para_svm, img_train, img_test))
+
+# Prepare for plotting
+colors1 <- rep('rgba(103,204,204,1)', length1)
+colors1[which.min(error_svm_tune)] <- 'rgba(222,45,38,0.8)'
+plot1_data <- data.frame(cost = cost_range1, accuracy = 1-error_svm_tune, COLOR = colors1)
+
+```
+##### Result:
+```{r sift_SVM_result, echo=FALSE}
+
+p1 <- plot_ly(plot1_data, x = ~cost, y = ~accuracy, type = 'scatter', 
+              mode = 'markers+lines', marker = list(size = 15),
+              name = "cross validation") %>%
+  add_trace(x = best_para_svm, y = ~max(accuracy), 
+            marker = list(size = 25), name = "best tune") %>% 
+  add_trace(x = c(min(cost_range1), max(cost_range1)), y = 1 - error_test_svm,
+            name = "test", marker = list(size = -1)) %>%
+  layout(title = 'CV accuracy of SVM_linear model',
+         showlegend = T)
+p1
+cat("CV accuracies:\n")
+1 - error_svm_tune
+result_svm <- paste0("Summary:\nThe best cost is ", best_para_svm, 
+                     ";\nThe accuracy of SVM(linear) model in cross validation: ", max(1 - error_svm_tune),
+                     ";\nThe accuracy of SVM(linear) model in test: ", 1 - error_test_svm, ".")
+cat(result_svm)
+```
+
+
+## 2) Sift + KNN: parameter: 'k'
+```{r sift_KNN}
+
+# knn
+knn_ <- function(k, train, test){
+  knn1 <- knn(train = train[, -n_response], test = test[, -n_response], cl = train[,n_response],k = k, prob = T)
+  error1 <- mean(knn1 != test[, n_response])
+  return(error1)
+}
+
+k_range1 <- c(1,2,3,5,10,20,30)
+length2 <- length(k_range1)
+error2 <- matrix(NA, nrow = folds, ncol = length2)
+
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error2[j,] <- parSapply(cl1, k_range1, knn_, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+
+colnames(error2) <- cost_range1
+error_knn <- colMeans(error2)
+
+best_para_knn <- as.numeric(names(error_knn)[which.min(error_knn)])
+time_2 <- system.time(error_test_knn <- knn_(best_para_knn, img_train, img_test))
+
+# Prepare for plotting
+colors2 <- rep('rgba(103,204,204,1)', length2)
+colors2[which.min(error_knn)] <- 'rgba(222,45,38,0.8)'
+plot2_data <- data.frame(k = k_range1, accuracy = 1-error_knn, COLOR = colors2)
+
+```
+
+##### Result:
+```{r sift_KNN_result, echo=FALSE}
+# Plot validation error
+p2 <- plot_ly(plot2_data, x = ~k, y = ~accuracy, type = 'scatter', 
+              mode = 'markers+lines', marker = list(size = 15),
+              name = "cross validation") %>%
+  add_trace(x = best_para_knn, y = ~max(accuracy), 
+            marker = list(size = 25), name = "best tune") %>% 
+  add_trace(x = c(min(k_range1), max(k_range1)), y = 1 - error_test_knn,
+            name = "test", marker = list(size = -1)) %>%
+  layout(title = 'CV accuracy of KNN',
+         showlegend = T)
+p2
+
+cat("CV accuracies:\n")
+1 - error_knn
+result_knn <- paste0("Summary: \nThe best k is ", best_para_knn, 
+                     ";\nThe accuracy of KNN model in cross validation: ", max(1 - error_knn),
+                     ";\nThe accuracy of KNN model in test: ", 1 - error_test_knn, ".")
+cat(result_knn)
+```
+
+
+## 3. Sift + GBM(Baseline): parameteres: 'n.tree'
+```{r sift_GBM}
+gbm_ <- function(ntree, train, test){
+  gbm1 <- gbm.fit(x = train[,-n_response], 
+                  y = train[,n_response],
+                  distribution = "bernoulli", 
+                  n.trees = ntree,
+                  interaction.depth = 1,
+                  verbose = F)
+  pred_gbm1 <- predict.gbm(gbm1, 
+                           newdata = test[,-n_response],
+                           n.trees = gbm1$n.trees, 
+                           type = "response")
+  pred_gbm1 <- ifelse(pred_gbm1 > 0.5, 1, 0)
+  error3 <- mean(pred_gbm1 != test[, n_response])
+  return(error3)
+}
+
+ntree_range <- c(100,250,500,1000,2500,5000,8000)
+length3 <- length(ntree_range)
+error3 <- matrix(NA, nrow = folds, ncol = length3)
+
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error3[j,] <- parSapply(cl1, ntree_range, gbm_, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+
+colnames(error3) <- ntree_range
+error_gbm <- colMeans(error3)
+
+ 
+best_para_gbm <- as.numeric(names(error_gbm)[which.min(error_gbm)])
+time_3 <- system.time(error_test_gbm <- gbm_(best_para_gbm, img_train, img_test))
+
+# Prepare for plotting
+colors3 <- rep('rgba(103,204,204,1)', length3)
+colors3[which.min(error_gbm)] <- 'rgba(222,45,38,0.8)'
+plot3_data <- data.frame(n.tree = ntree_range, accuracy = 1-error_gbm, COLOR = colors3)
+
+```
+
+##### Result:
+```{r sift_GBM_result, echo=FALSE}
+
+# Plot validation error
+p3 <- plot_ly(plot3_data, x = ~n.tree, y = ~accuracy, type = 'scatter', 
+              mode = 'markers+lines', marker = list(size = 15),
+              name = "cross validation") %>%
+  add_trace(x = best_para_gbm, y = ~max(accuracy), 
+            marker = list(size = 25), name = "best tune") %>% 
+  add_trace(x = c(min(ntree_range), max(ntree_range)), y = 1 - error_test_gbm,
+            name = "test", marker = list(size = 0)) %>%
+  layout(title = 'CV accuracy of GBM',
+         showlegend = T)
+p3
+
+cat("CV accuracies:\n")
+1 - error_gbm
+result_gbm <- paste0("Summary:\nThe best n.tree is ", best_para_gbm, 
+                     ";\nThe accuracy of GBM model in cross validation: ", max(1 - error_gbm),
+                     ";\nThe accuracy of GBM model in test: ", 1 - error_test_gbm, ".")
+cat(result_gbm)
+```
+
+
+## 4. Sift + SVM Kernel: 'cost' and 'gamma'
+```{r sift_SVM_K}
+
+# You can edit the values here
+gamma_cost_range <- 
+  list(A1 = c(1,1), A2 = c(1,5), A3 = c(1,10), A4 = c(1,30),
+       A5 = c(1,100), A6 = c(5,1),A7 = c(5,5), A8 = c(5,10),
+       A9 = c(5,30), A10 = c(5,100), A11 = c(10,1), A12 = c(10,5),
+       A13 = c(10,10), A14 = c(10,30), A15 = c(1,1), A16 = c(10,100),
+       A17 = c(0.1, 1), A18 = c(0.1,5), A19 = c(0.1,10), A20 = c(0.1,30),
+       A21 = c(20, 100), A31 = c(0.1,100), A32 = c(20,5), A33 = c(20,10),
+       A34 = c(20,30), A35 = c(20,100), A36 = c(0.1,400), A37 = c(0.1,1000),
+       A41 = c(0.1,100), A42 = c(50,5), A43 = c(50,10),A44 = c(50,30),
+       A45 = c(50,100), A46 = c(20,1), A47 = c(0.01,1000), A51 = c(100, 5),
+       A52 = c(100,1), A53 = c(100,30), A54 = c(100,100), A55 = c(50, 1),
+       A56 = c(100, 10), A57 = c(1000,5)
+       )  # gamma, cost
+
+length4 <- length(gamma_cost_range)
+error4 <- matrix(NA, nrow = folds, ncol = length4)
+
+# a kernel SVM
+svm_kernel <- function(paras, train, test){
+  svm4 <- svm(V1 ~., data = train, 
+              scale = F, kernel = "radial",
+              gamma = paras[1], cost = paras[2]) 
+  pred_svm4 <- ifelse(predict(svm4, test[,-n_response]) > 0.5, 1, 0)
+  error4 <- mean(pred_svm4 != test[, n_response])
+  return(error4)
+}
+
+
+## Do parallel computing!
+no_cores <- detectCores() - 1
+cl1 <- makeCluster(no_cores, type="FORK")
+
+error <- matrix(NA, nrow = folds, ncol = length4)
+for (j in 1:folds){ 
+  cv_train <- img_train[j != cv_ind,]
+  cv_test <- img_train[j == cv_ind,]
+  error4[j,] <- parSapply(cl1, gamma_cost_range, svm_kernel, train = cv_train, test = cv_test)
+}
+stopCluster(cl1)
+colnames(error4) <- sapply(gamma_cost_range, paste, collapse = ",")
+error_svm_kernel_tune <- colMeans(error4)
+
+# We should use regular expression or the original list to extract the best parameters
+best_name <- names(error_svm_kernel_tune)[which.min(error_svm_kernel_tune)]
+reg <- regexpr(pattern = ",", text = best_name)
+para1 <- as.numeric(substr(best_name, 1, reg-1))
+para2 <- as.numeric(substr(best_name, reg+1, nchar(best_name)))
+
+# Test Error
+time_4 <- system.time(error_test_svm_kernel <- svm_kernel(c(para1,para2), img_train, img_test))
+
+# Prepare for the plot
+x1 <- sapply(gamma_cost_range, function(l){return(l[1])})
+y1 <- sapply(gamma_cost_range, function(l){return(l[2])})
+z1 <- 1 - error_svm_kernel_tune
+plot4_data <- data.frame(GAMMA = x1, COST = y1, COLOR = z1)
+```
+
+##### Result:
+```{r sift_SVM_K_result, echo=FALSE}
+
+colors4 <- rep('rgba(103,204,204,1)', length4)
+colors4[which.min(error_svm_kernel_tune)] <- 'rgba(222,45,38,0.8)'
+
+
+p4 <- plot_ly(plot4_data, x = ~GAMMA, y = ~COST, text = ~COLOR, type = 'scatter', mode = 'markers',
+        marker = list(size = ~COLOR^(15) * 1000, opacity = 0.8, color = colors4)) %>%
+  layout(title = 'CV accuracy of SVM_kernel model(gamma, cost)',
+         xaxis = list(showgrid = T, type = "log"),
+         yaxis = list(showgrid = T, type = "log"))
+p4
+
+
+cat("CV accuracies:\n")
+1 - error_svm_kernel_tune
+result_svm_k <- paste0("Summary:\nThe best gamma is: ", para1, 
+                     ";\nThe best cost is: ", para2,
+                     ";\nThe accuracy of SVM(Kernel = radial) model in cross validation: ", 
+                     max(1 - error_svm_kernel_tune),
+                     ";\nThe accuracy of SVM(Kernel = radial) model in test: ", 1 - error_test_svm_kernel, ".")
+cat(result_svm_k)
+```
+
+
+
+# Conslusion
+
+Here are the performance of each algorithm. 
+
+```{r conclusion, echo=FALSE}
+
+RESULT <- c(max(1- error_svm_tune), 1- error_test_svm, time_1[1])
+RESULT <- rbind(RESULT, c(max(1- error_knn), 1- error_test_knn, time_2[1]))
+RESULT <- rbind(RESULT, c(max(1- error_gbm), 1- error_test_gbm, time_3[1]))
+RESULT <- rbind(RESULT, c(max(1- error_svm_kernel_tune), 1- error_test_svm_kernel, time_4[1]))
+colnames(RESULT) <- c("CV Accuracy", "TEST Accuracy", "Training Time")
+rownames(RESULT) <- c("SVM(Linear)", "KNN", "GBM","SVM(Kernel)")
+RESULT
+cat("Hence, to get a higher accuracy, we could choose:", rownames(RESULT)[which.max(RESULT[,2])], "; However, if the time is really limited, we could consider:", rownames(RESULT)[which.min(RESULT[,3])],".")
+```
